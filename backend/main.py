@@ -31,10 +31,6 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Terms that matter for the "spoken email" problem: the connector words
-# themselves plus the domains users actually say out loud. Nova-3 uses
-# keyterm prompting (plain terms, no ":boost" suffix), which replaced the
-# older Nova-2 "keywords" parameter.
 KEYTERMS = [
     "at",
     "dot",
@@ -67,29 +63,51 @@ async def websocket_transcribe(client_ws: WebSocket):
 
     dg_connection = deepgram_client.listen.asyncwebsocket.v("1")
 
+    final_buffer: list[str] = []
+
+    async def flush_buffer():
+        if not final_buffer:
+            return
+        full_transcript = " ".join(final_buffer)
+        final_buffer.clear()
+        cleaned = normalize_email_like(full_transcript)
+        await client_ws.send_json({
+            "type": "final",
+            "transcript": cleaned,
+            "raw": full_transcript,
+        })
+
     async def on_transcript(self, result, **kwargs):
         alt = result.channel.alternatives[0]
         transcript = alt.transcript
-        if not transcript:
-            return
 
         if result.is_final:
-            cleaned = normalize_email_like(transcript)
-            await client_ws.send_json({
-                "type": "final",
-                "transcript": cleaned,
-                "raw": transcript,
-            })
-        else:
+            if transcript:
+                final_buffer.append(transcript)
+            if result.speech_final:
+                await flush_buffer()
+            elif final_buffer:
+                await client_ws.send_json({
+                    "type": "interim",
+                    "transcript": " ".join(final_buffer),
+                })
+            return
+
+        if transcript:
+            preview = " ".join(final_buffer + [transcript]) if final_buffer else transcript
             await client_ws.send_json({
                 "type": "interim",
-                "transcript": transcript,
+                "transcript": preview,
             })
+
+    async def on_utterance_end(self, utterance_end, **kwargs):
+        await flush_buffer()
 
     async def on_error(self, error, **kwargs):
         logger.error("Deepgram error: %s", error)
 
     dg_connection.on(LiveTranscriptionEvents.Transcript, on_transcript)
+    dg_connection.on(LiveTranscriptionEvents.UtteranceEnd, on_utterance_end)
     dg_connection.on(LiveTranscriptionEvents.Error, on_error)
 
     options = LiveOptions(
@@ -99,6 +117,8 @@ async def websocket_transcribe(client_ws: WebSocket):
         interim_results=True,
         punctuate=True,
         keyterm=KEYTERMS,
+        endpointing=400,
+        utterance_end_ms=1000,
     )
 
     started = await dg_connection.start(options)

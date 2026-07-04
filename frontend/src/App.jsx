@@ -58,20 +58,12 @@ function App() {
   const mountedRef = useRef(true)
   const reconnectAttemptsRef = useRef(0)
 
-  // Opens a fresh WebSocket (and thus a fresh Deepgram connection) and leaves
-  // it warm for the next listening session. Each session MUST have its own
-  // connection: every MediaRecorder.start() emits a self-contained WebM/Opus
-  // stream with its own header, and feeding a second WebM stream into a
-  // Deepgram connection that already consumed a first one is unparseable --
-  // which is why restarts used to go silent.
   const openWarmConnection = useCallback(() => {
     const ws = new WebSocket(WS_URL)
     ws.intentionalClose = false
     wsRef.current = ws
 
     ws.onopen = () => {
-      // A healthy connection resets the backoff, so the next unexpected drop
-      // starts retrying quickly again.
       reconnectAttemptsRef.current = 0
     }
 
@@ -92,15 +84,8 @@ function App() {
     }
 
     ws.onclose = () => {
-      // Intentional closes (session stop, unmount) already have a replacement
-      // opened or don't want one -- only re-warm after an *unexpected* drop
-      // (e.g. the backend's --reload restarting on a file save).
       if (ws.intentionalClose || !mountedRef.current) return
       setListening(false)
-      // Exponential backoff (1s, 2s, 4s ... capped at 15s) so that if the
-      // backend is down or Deepgram is temporarily rejecting new connections
-      // (e.g. its concurrent-connection limit), we don't hammer it with a
-      // reconnect every second and turn a blip into a storm.
       const attempt = reconnectAttemptsRef.current++
       const delay = Math.min(1000 * 2 ** attempt, 15000)
       setTimeout(() => {
@@ -123,9 +108,6 @@ function App() {
 
   const startListening = async () => {
     setError('')
-    // The connection warms up silently in the background; on the rare chance
-    // it isn't open yet (e.g. clicked instantly after a stop), ignore the
-    // click rather than surfacing an error.
     if (wsRef.current?.readyState !== WebSocket.OPEN) {
       return
     }
@@ -152,10 +134,6 @@ function App() {
   const stopListening = () => {
     mediaRecorderRef.current?.stop()
     streamRef.current?.getTracks().forEach((track) => track.stop())
-
-    // Close this session's connection so Deepgram finalizes it, then warm a
-    // brand-new one for the next session (each session needs its own -- see
-    // openWarmConnection).
     if (wsRef.current) {
       wsRef.current.intentionalClose = true
       wsRef.current.close()
