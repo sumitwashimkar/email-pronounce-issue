@@ -3,13 +3,13 @@
 ## The Problem
 
 When people speak to a voice AI agent, some things are hard for speech-to-text
-(STT) to get right — especially **email addresses** and **brand names**.
+(STT) to get right especially **email addresses** and **brand names**.
 
 For example, if a user says their email out loud:
 
 > "john dot smith at gmail dot com"
 
-A normal STT engine writes down exactly what it heard — the *words*:
+A normal STT writes down exactly what it heard the *words*:
 
 > `john dot smith at gmail dot com`
 
@@ -23,12 +23,12 @@ The same thing happens with:
 - **Product / brand names** the STT has never seen (e.g. "vibetree" heard as
   "wip3" or "vip tree").
 
-This demo picks one STT engine (Deepgram), reproduces these problems, and fixes
+This demo picks one STT (Deepgram), reproduces these problems, and fixes
 them.
 
 ## The Approach
 
-No single STT engine solves this perfectly on its own — so the fix is built in
+No single STT solves this perfectly on its own so the fix is built in
 **layers**, each catching a different part of the problem:
 
 1. **Tell the STT what to expect (before it listens).**
@@ -41,8 +41,7 @@ No single STT engine solves this perfectly on its own — so the fix is built in
    - turns spoken words into symbols → "at" becomes `@`, "dot" becomes `.`
    - only does this when it clearly looks like an email, so normal sentences
      ("meet me at the office") are left untouched.
-   - fixes slightly-misheard known domains → "outlok.com" becomes `outlook.com`,
-     "redgmail.com" becomes `gmail.com`.
+   - fixes slightly-misheard known domains → "outlok.com" becomes `outlook.com`.
 
 So the STT gets a hint up front, and the transcript gets polished afterward.
 
