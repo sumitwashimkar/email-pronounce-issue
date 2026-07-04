@@ -56,6 +56,7 @@ function App() {
   const mediaRecorderRef = useRef(null)
   const streamRef = useRef(null)
   const mountedRef = useRef(true)
+  const reconnectAttemptsRef = useRef(0)
 
   // Opens a fresh WebSocket (and thus a fresh Deepgram connection) and leaves
   // it warm for the next listening session. Each session MUST have its own
@@ -67,6 +68,12 @@ function App() {
     const ws = new WebSocket(WS_URL)
     ws.intentionalClose = false
     wsRef.current = ws
+
+    ws.onopen = () => {
+      // A healthy connection resets the backoff, so the next unexpected drop
+      // starts retrying quickly again.
+      reconnectAttemptsRef.current = 0
+    }
 
     ws.onmessage = (event) => {
       const data = JSON.parse(event.data)
@@ -90,9 +97,15 @@ function App() {
       // (e.g. the backend's --reload restarting on a file save).
       if (ws.intentionalClose || !mountedRef.current) return
       setListening(false)
+      // Exponential backoff (1s, 2s, 4s ... capped at 15s) so that if the
+      // backend is down or Deepgram is temporarily rejecting new connections
+      // (e.g. its concurrent-connection limit), we don't hammer it with a
+      // reconnect every second and turn a blip into a storm.
+      const attempt = reconnectAttemptsRef.current++
+      const delay = Math.min(1000 * 2 ** attempt, 15000)
       setTimeout(() => {
         if (mountedRef.current) openWarmConnection()
-      }, 1000)
+      }, delay)
     }
 
     return ws
