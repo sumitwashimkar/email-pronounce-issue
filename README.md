@@ -32,7 +32,7 @@ No single STT engine solves this perfectly on its own — so the fix is built in
 **layers**, each catching a different part of the problem:
 
 1. **Tell the STT what to expect (before it listens).**
-   Deepgram supports "keyterm prompting" — we give it a list of words it should
+   Deepgram supports "keyterm normalisation" — we give it a list of words it should
    expect (`at`, `dot`, common domains, and brand names like `vibetree`). This
    makes it recognise those words correctly instead of guessing a wrong one.
 
