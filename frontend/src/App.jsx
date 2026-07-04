@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import './App.css'
 
 const WS_URL = 'ws://localhost:8000/ws'
@@ -55,60 +55,64 @@ function App() {
   const wsRef = useRef(null)
   const mediaRecorderRef = useRef(null)
   const streamRef = useRef(null)
+  const mountedRef = useRef(true)
+
+  // Opens a fresh WebSocket (and thus a fresh Deepgram connection) and leaves
+  // it warm for the next listening session. Each session MUST have its own
+  // connection: every MediaRecorder.start() emits a self-contained WebM/Opus
+  // stream with its own header, and feeding a second WebM stream into a
+  // Deepgram connection that already consumed a first one is unparseable --
+  // which is why restarts used to go silent.
+  const openWarmConnection = useCallback(() => {
+    const ws = new WebSocket(WS_URL)
+    ws.intentionalClose = false
+    wsRef.current = ws
+
+    ws.onmessage = (event) => {
+      const data = JSON.parse(event.data)
+      if (data.type === 'interim') {
+        setInterimText(data.transcript)
+      } else if (data.type === 'final') {
+        setFinalChunks((prev) => [...prev, data.transcript])
+        setInterimText('')
+      } else if (data.type === 'error') {
+        setError(data.message)
+      }
+    }
+
+    ws.onerror = () => {
+      if (mountedRef.current) setError('Connection to backend failed. Is it running?')
+    }
+
+    ws.onclose = () => {
+      // Intentional closes (session stop, unmount) already have a replacement
+      // opened or don't want one -- only re-warm after an *unexpected* drop
+      // (e.g. the backend's --reload restarting on a file save).
+      if (ws.intentionalClose || !mountedRef.current) return
+      setListening(false)
+      setTimeout(() => {
+        if (mountedRef.current) openWarmConnection()
+      }, 1000)
+    }
+
+    return ws
+  }, [])
 
   useEffect(() => {
-    // `cancelled` distinguishes "we're closing this on purpose" (real
-    // unmount, or React StrictMode's dev-only double-invoke of this
-    // effect) from "the connection dropped unexpectedly" (e.g. the
-    // backend's --reload restarting on a file save). Only the latter
-    // should trigger an auto-reconnect -- otherwise every StrictMode
-    // double-mount leaks an orphaned extra connection.
-    let cancelled = false
-    let ws = null
-
-    const connect = () => {
-      if (cancelled) return
-      ws = new WebSocket(WS_URL)
-      wsRef.current = ws
-
-      ws.onmessage = (event) => {
-        const data = JSON.parse(event.data)
-        if (data.type === 'interim') {
-          setInterimText(data.transcript)
-        } else if (data.type === 'final') {
-          setFinalChunks((prev) => [...prev, data.transcript])
-          setInterimText('')
-        } else if (data.type === 'error') {
-          setError(data.message)
-        }
-      }
-
-      ws.onerror = () => {
-        if (!cancelled) setError('Connection to backend failed. Is it running?')
-      }
-
-      ws.onclose = () => {
-        if (cancelled) return
-        setListening(false)
-        // Backend/Deepgram pipe dropped -- reopen it in the background so
-        // it's warm again next time the user clicks the mic.
-        setTimeout(connect, 1000)
-      }
-    }
-
-    connect()
-
+    mountedRef.current = true
+    const ws = openWarmConnection()
     return () => {
-      cancelled = true
-      ws?.close()
+      mountedRef.current = false
+      ws.intentionalClose = true
+      ws.close()
     }
-  }, [])
+  }, [openWarmConnection])
 
   const startListening = async () => {
     setError('')
-    // Backend/Deepgram pipe warms up silently on page load; on the rare
-    // chance it isn't ready yet (e.g. clicked within the first instant
-    // after load), just ignore the click rather than surfacing an error.
+    // The connection warms up silently in the background; on the rare chance
+    // it isn't open yet (e.g. clicked instantly after a stop), ignore the
+    // click rather than surfacing an error.
     if (wsRef.current?.readyState !== WebSocket.OPEN) {
       return
     }
@@ -135,6 +139,16 @@ function App() {
   const stopListening = () => {
     mediaRecorderRef.current?.stop()
     streamRef.current?.getTracks().forEach((track) => track.stop())
+
+    // Close this session's connection so Deepgram finalizes it, then warm a
+    // brand-new one for the next session (each session needs its own -- see
+    // openWarmConnection).
+    if (wsRef.current) {
+      wsRef.current.intentionalClose = true
+      wsRef.current.close()
+    }
+    openWarmConnection()
+
     setListening(false)
     setInterimText('')
   }
